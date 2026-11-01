@@ -206,6 +206,25 @@ fn image_calibration_outside_bands_covers_the_frequency() {
 }
 
 #[test]
+fn preamble_detector_is_the_longest_that_fits() {
+    let expected = [
+        (0, PreambleDetectorLength::Off),
+        (7, PreambleDetectorLength::Off),
+        (8, PreambleDetectorLength::Bits8),
+        (15, PreambleDetectorLength::Bits8),
+        (16, PreambleDetectorLength::Bits16),
+        (23, PreambleDetectorLength::Bits16),
+        (24, PreambleDetectorLength::Bits24),
+        (31, PreambleDetectorLength::Bits24),
+        (32, PreambleDetectorLength::Bits32),
+        (u16::MAX, PreambleDetectorLength::Bits32),
+    ];
+    for (bits, detector) in expected {
+        assert_eq!(PreambleDetectorLength::longest_within(bits), detector);
+    }
+}
+
+#[test]
 fn clear_errors_and_calibration_have_datasheet_bytes() {
     assert_eq!(ClearDeviceErrors::id(), 0x07);
     assert_eq!(

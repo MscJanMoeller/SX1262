@@ -51,6 +51,8 @@ and preserve unrecognized command-status values and the raw byte.
 `ImageCalibConfig::for_frequency_hz` picks the band containing a frequency; for
 other frequencies it calibrates ±4 MHz around it (RadioLib's approach, not
 vendor-validated), and `ImageCalibConfig::covering` computes the codes for any range.
+`PreambleDetectorLength::longest_within` picks the longest GFSK preamble detector
+that fits the shorter of the preamble and the sync word, as RadioLib does.
 The driver is organized into modules for registers and commands:
 
 - **device**: Main interface for hardware interaction

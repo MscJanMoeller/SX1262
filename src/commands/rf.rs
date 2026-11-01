@@ -657,7 +657,7 @@ impl ToByteArray for PacketParams {
 /// The preamble detector acts as a gate to the packet controller, when different from 0x00
 /// (preamble detector length off) the packet controller only becomes actve if a cerain number of
 /// preamble bits have been successfully received by the radio.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreambleDetectorLength {
     /// preamble detector length off
     Off = 0x00,
@@ -669,6 +669,22 @@ pub enum PreambleDetectorLength {
     Bits24 = 0x06,
     /// preamble detector length 32 bits
     Bits32 = 0x07,
+}
+
+impl PreambleDetectorLength {
+    /// Longest detector that fits in `bits`, or [`Self::Off`] below 8 bits.
+    ///
+    /// The detector must not be longer than the sync word (datasheet 6.2.2.1) or the
+    /// preamble, so pass the shorter of the two lengths in bits.
+    pub const fn longest_within(bits: u16) -> Self {
+        match bits {
+            32.. => Self::Bits32,
+            24..=31 => Self::Bits24,
+            16..=23 => Self::Bits16,
+            8..=15 => Self::Bits8,
+            0..=7 => Self::Off,
+        }
+    }
 }
 
 /// The node address and the broadcast address are directly programmed into the device through
