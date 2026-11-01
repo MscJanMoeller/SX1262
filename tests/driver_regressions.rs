@@ -162,6 +162,50 @@ fn preserves_unrecognized_command_status_from_radio() {
 }
 
 #[test]
+fn image_calibration_matches_datasheet_bands() {
+    let bands = [
+        (430, 440, ImageCalibConfig::BAND_430_440_MHZ, [0x6b, 0x6f]),
+        (470, 510, ImageCalibConfig::BAND_470_510_MHZ, [0x75, 0x81]),
+        (779, 787, ImageCalibConfig::BAND_779_787_MHZ, [0xc1, 0xc5]),
+        (863, 870, ImageCalibConfig::BAND_863_870_MHZ, [0xd7, 0xdb]),
+        (902, 928, ImageCalibConfig::BAND_902_928_MHZ, [0xe1, 0xe9]),
+    ];
+    for (min_mhz, max_mhz, band, bytes) in bands {
+        let (min_hz, max_hz) = (min_mhz * 1_000_000, max_mhz * 1_000_000);
+        assert_eq!(band.to_bytes().unwrap(), bytes);
+        assert_eq!(ImageCalibConfig::covering(min_hz, max_hz), band);
+        assert_eq!(ImageCalibConfig::for_frequency_hz(min_hz), band);
+        assert_eq!(ImageCalibConfig::for_frequency_hz(max_hz), band);
+        assert_eq!(
+            ImageCalibConfig::for_frequency_hz((min_hz + max_hz) / 2),
+            band
+        );
+    }
+}
+
+#[test]
+fn image_calibration_outside_bands_covers_the_frequency() {
+    let expected = [
+        (150_000_000, [35, 39]),
+        (315_000_000, [77, 81]),
+        (870_350_000, [0xd7, 0xdb]),
+        (928_000_001, [229, 235]),
+        (960_000_000, [237, 243]),
+    ];
+    for (frequency_hz, codes) in expected {
+        let config = ImageCalibConfig::for_frequency_hz(frequency_hz);
+        assert_eq!(config.to_bytes().unwrap(), codes, "{frequency_hz} Hz");
+        assert!(config.freq1 % 2 == 1 && config.freq2 % 2 == 1);
+        assert!(u32::from(config.freq1) * 4_000_000 < frequency_hz);
+        assert!(u32::from(config.freq2) * 4_000_000 > frequency_hz);
+    }
+    assert_eq!(
+        ImageCalibConfig::covering(0, u32::MAX).to_bytes().unwrap(),
+        [0, 255]
+    );
+}
+
+#[test]
 fn clear_errors_and_calibration_have_datasheet_bytes() {
     assert_eq!(ClearDeviceErrors::id(), 0x07);
     assert_eq!(

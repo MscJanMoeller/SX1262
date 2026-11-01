@@ -568,7 +568,7 @@ impl Command for Calibrate {
 /// Image calibration configuration
 ///
 /// Defines frequency range for image calibration.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageCalibConfig {
     /// Start frequency code
     pub freq1: u8,
@@ -577,11 +577,83 @@ pub struct ImageCalibConfig {
 }
 
 impl ImageCalibConfig {
-    /// Calibration for the 863–870 MHz band.
+    /// Calibration for the 430–440 MHz band (datasheet table 9-2).
+    pub const BAND_430_440_MHZ: Self = Self {
+        freq1: 0x6b,
+        freq2: 0x6f,
+    };
+    /// Calibration for the 470–510 MHz band (datasheet table 9-2).
+    pub const BAND_470_510_MHZ: Self = Self {
+        freq1: 0x75,
+        freq2: 0x81,
+    };
+    /// Calibration for the 779–787 MHz band (datasheet table 9-2).
+    pub const BAND_779_787_MHZ: Self = Self {
+        freq1: 0xc1,
+        freq2: 0xc5,
+    };
+    /// Calibration for the 863–870 MHz band (datasheet table 9-2).
     pub const BAND_863_870_MHZ: Self = Self {
         freq1: 0xd7,
         freq2: 0xdb,
     };
+    /// Calibration for the 902–928 MHz band (datasheet table 9-2, power-on default).
+    pub const BAND_902_928_MHZ: Self = Self {
+        freq1: 0xe1,
+        freq2: 0xe9,
+    };
+
+    /// Half-width of the window calibrated around a frequency outside the datasheet bands.
+    const FALLBACK_MARGIN_HZ: u32 = 4_000_000;
+
+    /// Calibration covering `min_hz..=max_hz`.
+    ///
+    /// The codes count 4 MHz steps. Both are odd: `freq1` is rounded down and `freq2` up,
+    /// starting 1 MHz outside the range. This formula reproduces every row of the
+    /// datasheet's ISM band table, so it is also what RadioLib uses for other ranges.
+    pub const fn covering(min_hz: u32, max_hz: u32) -> Self {
+        let mut freq1 = min_hz.saturating_sub(1_000_000) / 4_000_000;
+        let mut freq2 = max_hz.saturating_add(1_000_000).div_ceil(4_000_000);
+        if freq2 > 255 {
+            freq2 = 255;
+        }
+        if freq1 > 255 {
+            freq1 = 255;
+        }
+        if freq1 & 1 == 0 {
+            freq1 = freq1.saturating_sub(1);
+        }
+        if freq2 & 1 == 0 {
+            freq2 += 1;
+        }
+        Self {
+            freq1: freq1 as u8,
+            freq2: freq2 as u8,
+        }
+    }
+
+    /// Calibration for receiving or transmitting at `frequency_hz`.
+    ///
+    /// Frequencies inside a datasheet ISM band use that band's values. Semtech does not
+    /// publish values for other frequencies, so those calibrate ±4 MHz around the
+    /// frequency, like RadioLib does; the result is not vendor-validated.
+    ///
+    /// The frequency should be within [`RfFrequencyConfig::FREQUENCY_HZ`].
+    ///
+    /// [`RfFrequencyConfig::FREQUENCY_HZ`]: super::rf::RfFrequencyConfig::FREQUENCY_HZ
+    pub const fn for_frequency_hz(frequency_hz: u32) -> Self {
+        match frequency_hz {
+            430_000_000..=440_000_000 => Self::BAND_430_440_MHZ,
+            470_000_000..=510_000_000 => Self::BAND_470_510_MHZ,
+            779_000_000..=787_000_000 => Self::BAND_779_787_MHZ,
+            863_000_000..=870_000_000 => Self::BAND_863_870_MHZ,
+            902_000_000..=928_000_000 => Self::BAND_902_928_MHZ,
+            _ => Self::covering(
+                frequency_hz.saturating_sub(Self::FALLBACK_MARGIN_HZ),
+                frequency_hz.saturating_add(Self::FALLBACK_MARGIN_HZ),
+            ),
+        }
+    }
 }
 
 impl ToByteArray for ImageCalibConfig {

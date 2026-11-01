@@ -46,6 +46,11 @@ bandwidth settings and hertz. Status responses reject invalid operating modes
 and preserve unrecognized command-status values and the raw byte.
 `GetRawStatus` is available when the raw status byte is needed for diagnostics.
 
+`ImageCalibConfig` provides the datasheet's image-calibration values for the
+430–440, 470–510, 779–787, 863–870 and 902–928 MHz bands.
+`ImageCalibConfig::for_frequency_hz` picks the band containing a frequency; for
+other frequencies it calibrates ±4 MHz around it (RadioLib's approach, not
+vendor-validated), and `ImageCalibConfig::covering` computes the codes for any range.
 The driver is organized into modules for registers and commands:
 
 - **device**: Main interface for hardware interaction
