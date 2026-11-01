@@ -4,10 +4,10 @@ use regiface::{Command, FromByteArray, ToByteArray};
 use std::task::{Context, Poll, Waker};
 use sx1262::{
     commands::{
-        ClearDeviceErrors, GetDeviceErrors, GetDeviceErrorsResponse, GetIrqStatus,
-        GetIrqStatusResponse, GetPacketStatusResponse, GetRawStatus, GetRssiInstResponse,
-        GetRxBufferStatusResponse, GetStatsResponse, ImageCalibConfig, IrqMask, SetDio3AsTcxoCtrl,
-        TcxoConfig, TcxoVoltage,
+        ClearDeviceErrors, CommandStatusError, GetDeviceErrors, GetDeviceErrorsResponse,
+        GetIrqStatus, GetIrqStatusResponse, GetPacketStatusResponse, GetRawStatus,
+        GetRssiInstResponse, GetRxBufferStatusResponse, GetStatsResponse, ImageCalibConfig,
+        IrqMask, OperatingMode, SetDio3AsTcxoCtrl, TcxoConfig, TcxoVoltage,
     },
     Device, Error,
 };
@@ -128,6 +128,18 @@ fn invalid_statuses_are_errors_instead_of_panics() {
 }
 
 #[test]
+fn preserves_unrecognized_command_status_from_radio() {
+    let response = GetDeviceErrorsResponse::from_bytes([0xa2, 0, 0x20]).unwrap();
+    assert_eq!(response.status.raw, 0xa2);
+    assert_eq!(response.status.mode, OperatingMode::StandbyRc);
+    assert_eq!(
+        response.status.cmd_status,
+        Err(CommandStatusError::InvalidValue(1))
+    );
+    assert_eq!(response.errors.raw, 0x20);
+}
+
+#[test]
 fn clear_errors_and_calibration_have_datasheet_bytes() {
     assert_eq!(ClearDeviceErrors::id(), 0x07);
     assert_eq!(
@@ -172,7 +184,10 @@ fn synchronous_device_reports_spi_serialization_and_deserialization_errors() {
     });
     assert!(matches!(
         device.execute_command(GetDeviceErrors),
-        Err(Error::Deserialization)
+        Err(Error::Deserialization {
+            opcode: 0x17,
+            first_byte: Some(0),
+        })
     ));
 }
 
@@ -193,7 +208,10 @@ fn async_device_preserves_transport_and_parser_errors() {
     });
     assert!(matches!(
         ready(device.execute_command_async(GetIrqStatus)),
-        Err(Error::Deserialization)
+        Err(Error::Deserialization {
+            opcode: 0x12,
+            first_byte: Some(0),
+        })
     ));
 
     let mut device = Device::new(MockSpi::default());

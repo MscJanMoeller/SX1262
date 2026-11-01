@@ -35,8 +35,6 @@ pub enum CommandStatusError {
 pub enum StatusError {
     /// Error extracting operating mode from status byte
     InvalidMode(OperatingModeError),
-    /// Error extracting command status from status byte
-    InvalidCommandStatus(CommandStatusError),
 }
 
 impl From<Infallible> for StatusError {
@@ -130,10 +128,12 @@ impl CommandStatus {
 /// - Bits 0: Reserved
 #[derive(Debug, Clone, Copy)]
 pub struct Status {
+    /// Unmodified status byte, including reserved bits.
+    pub raw: u8,
     /// Current operating mode of the device
     pub mode: OperatingMode,
-    /// Status of the last command execution
-    pub cmd_status: CommandStatus,
+    /// Status of the last command execution, or its unrecognized field value.
+    pub cmd_status: Result<CommandStatus, CommandStatusError>,
 }
 
 impl FromByteArray for Status {
@@ -143,9 +143,9 @@ impl FromByteArray for Status {
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         let mode = (bytes[0] >> 4) & 0x7;
         Ok(Self {
+            raw: bytes[0],
             mode: OperatingMode::try_from(mode).map_err(StatusError::InvalidMode)?,
-            cmd_status: CommandStatus::from_status_byte(bytes[0])
-                .map_err(StatusError::InvalidCommandStatus)?,
+            cmd_status: CommandStatus::from_status_byte(bytes[0]),
         })
     }
 }

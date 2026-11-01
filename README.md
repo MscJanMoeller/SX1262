@@ -33,11 +33,13 @@ fn configure_radio<SPI: SpiDevice>(spi: SPI) -> Result<Device<SPI>, Error<SPI::E
 ```
 
 SPI errors are preserved; invalid command parameters and responses return
-serialization or deserialization errors. The caller must handle BUSY timing,
+serialization or deserialization errors. Deserialization errors include the
+opcode and first response byte, if any. The caller must handle BUSY timing,
 IRQ waits, and the radio's required command sequence.
 
 `TcxoConfig::delay` is a 24-bit count of 15.625 µs steps; larger values are
-rejected. Status responses reject invalid status bytes. `GetRawStatus` is
+rejected. Status responses reject invalid operating modes and preserve
+unrecognized command-status values and the raw byte. `GetRawStatus` is
 available when the raw status byte is needed for diagnostics.
 
 The driver is organized into modules for registers and commands:

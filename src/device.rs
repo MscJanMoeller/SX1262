@@ -32,6 +32,7 @@ use regiface::{
 
 /// Write-register command opcode.
 pub const OPCODE_WRITE_REGISTER: u8 = 0x0d;
+const OPCODE_READ_REGISTER: u8 = 0x1d;
 /// Read-buffer command opcode.
 pub const OPCODE_READ_BUFFER: u8 = 0x1e;
 
@@ -43,7 +44,17 @@ pub enum Error<S> {
     /// Command parameters could not be encoded.
     Serialization,
     /// A device response could not be decoded.
-    Deserialization,
+    Deserialization {
+        /// Opcode used for the failed read.
+        opcode: u8,
+        /// First response byte, if the response was not empty.
+        first_byte: Option<u8>,
+    },
+}
+
+fn decode_response<T: FromByteArray, S>(opcode: u8, bytes: T::Array) -> Result<T, Error<S>> {
+    let first_byte = bytes.as_ref().first().copied();
+    T::from_bytes(bytes).map_err(|_| Error::Deserialization { opcode, first_byte })
 }
 
 /// Main device interface for the SX126x radio.
@@ -83,12 +94,12 @@ where
     ///
     /// # Errors
     /// * `Error::Spi` - SPI communication failed
-    /// * `Error::Deserialization` - Failed to parse register value
+    /// * `Error::Deserialization { .. }` - Failed to parse register value
     pub fn read_register<R>(&mut self) -> Result<R, Error<SPI::Error>>
     where
         R: ReadableRegister<IdType = u16>,
     {
-        let header = &mut [0x1D, 0x00, 0x00, 0x00];
+        let header = &mut [OPCODE_READ_REGISTER, 0x00, 0x00, 0x00];
         header[1..=2].copy_from_slice(&R::id().to_be_bytes());
 
         let mut raw_value = R::Array::new();
@@ -100,7 +111,7 @@ where
             ])
             .map_err(Error::Spi)?;
 
-        R::from_bytes(raw_value).map_err(|_| Error::Deserialization)
+        decode_response(OPCODE_READ_REGISTER, raw_value)
     }
 
     /// Writes a value to a device register.
@@ -182,7 +193,7 @@ where
     /// # Errors
     /// * `Error::Spi` - SPI communication failed
     /// * `Error::Serialization` - Invalid command parameters
-    /// * `Error::Deserialization` - Failed to parse command response
+    /// * `Error::Deserialization { .. }` - Failed to parse command response
     pub fn execute_command<C>(
         &mut self,
         command: C,
@@ -204,7 +215,7 @@ where
             ])
             .map_err(Error::Spi)?;
 
-        C::ResponseParameters::from_bytes(raw_response).map_err(|_| Error::Deserialization)
+        decode_response(C::id(), raw_response)
     }
 }
 
@@ -219,7 +230,7 @@ where
     where
         R: ReadableRegister<IdType = u16>,
     {
-        let header = &mut [0x1D, 0x00, 0x00, 0x00];
+        let header = &mut [OPCODE_READ_REGISTER, 0x00, 0x00, 0x00];
         header[1..=2].copy_from_slice(&R::id().to_be_bytes());
 
         let mut raw_value = R::Array::new();
@@ -232,7 +243,7 @@ where
             .await
             .map_err(Error::Spi)?;
 
-        R::from_bytes(raw_value).map_err(|_| Error::Deserialization)
+        decode_response(OPCODE_READ_REGISTER, raw_value)
     }
 
     /// Asynchronously writes a value to a device register.
@@ -319,6 +330,6 @@ where
             .await
             .map_err(Error::Spi)?;
 
-        C::ResponseParameters::from_bytes(raw_response).map_err(|_| Error::Deserialization)
+        decode_response(C::id(), raw_response)
     }
 }
