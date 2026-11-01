@@ -566,6 +566,14 @@ pub struct ImageCalibConfig {
     pub freq2: u8,
 }
 
+impl ImageCalibConfig {
+    /// Calibration for the 863–870 MHz band.
+    pub const BAND_863_870_MHZ: Self = Self {
+        freq1: 0xd7,
+        freq2: 0xdb,
+    };
+}
+
 impl ToByteArray for ImageCalibConfig {
     type Error = Infallible;
     type Array = [u8; 2];

@@ -64,7 +64,7 @@
 //! use embedded_hal::spi::SpiDevice;
 //! use sx1262::{Device, commands::{SetStandby, StandbyConfig}, Error};
 //!
-//! fn configure_radio<SPI: SpiDevice>(spi: SPI) -> Result<Device<SPI>, Error> {
+//! fn configure_radio<SPI: SpiDevice>(spi: SPI) -> Result<Device<SPI>, Error<SPI::Error>> {
 //!     let mut device = Device::new(spi);
 //!     
 //!     // Set to STDBY_RC mode for configuration
@@ -74,7 +74,6 @@
 //! }
 //! ```
 
-pub use regiface::errors::Error;
 use regiface::*;
 
 pub mod commands;
@@ -82,5 +81,5 @@ pub mod device;
 pub mod registers;
 
 pub use commands::*;
-pub use device::Device;
+pub use device::{Device, Error};
 pub use registers::*;

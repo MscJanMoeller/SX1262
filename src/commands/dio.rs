@@ -12,7 +12,7 @@
 
 use core::convert::Infallible;
 
-use crate::commands::status::Status;
+use crate::commands::status::{Status, StatusError};
 use crate::{Command, FromByteArray, NoParameters, ToByteArray};
 
 bitflags::bitflags! {
@@ -25,18 +25,20 @@ bitflags::bitflags! {
         const RX_DONE = 1 << 1;
         /// Preamble detected
         const PREAMBLE_DETECTED = 1 << 2;
-        /// Valid sync word detected (FSK) / Valid header received (LoRa)
+        /// Valid sync word detected (FSK)
         const SYNC_WORD_VALID = 1 << 3;
+        /// Valid LoRa header received
+        const HEADER_VALID = 1 << 4;
         /// Header CRC error (LoRa)
-        const HEADER_ERROR = 1 << 4;
+        const HEADER_ERROR = 1 << 5;
         /// Payload CRC error
-        const CRC_ERROR = 1 << 5;
+        const CRC_ERROR = 1 << 6;
         /// Channel activity detection finished
-        const CAD_DONE = 1 << 6;
+        const CAD_DONE = 1 << 7;
         /// Channel activity detected
-        const CAD_DETECTED = 1 << 7;
+        const CAD_DETECTED = 1 << 8;
         /// RX or TX timeout
-        const TIMEOUT = 1 << 8;
+        const TIMEOUT = 1 << 9;
     }
 }
 
@@ -54,7 +56,7 @@ impl FromByteArray for IrqMask {
     type Array = [u8; 2];
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
-        Ok(IrqMask::from_bits_truncate(u16::from_be_bytes(bytes)))
+        Ok(IrqMask::from_bits_retain(u16::from_be_bytes(bytes)))
     }
 }
 
@@ -137,13 +139,13 @@ pub struct GetIrqStatusResponse {
 }
 
 impl FromByteArray for GetIrqStatusResponse {
-    type Error = Infallible;
+    type Error = StatusError;
     type Array = [u8; 3]; // 1 status byte + 2 IRQ bytes
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         Ok(Self {
-            status: Status::from_bytes([bytes[0]]).unwrap(),
-            irq_mask: IrqMask::from_bytes([bytes[1], bytes[2]]).unwrap(),
+            status: Status::from_bytes([bytes[0]])?,
+            irq_mask: IrqMask::from_bytes([bytes[1], bytes[2]])?,
         })
     }
 }
@@ -286,11 +288,18 @@ pub struct TcxoConfig {
     pub delay: u32,
 }
 
+/// TCXO delay exceeds the 24-bit range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidTcxoDelay;
+
 impl ToByteArray for TcxoConfig {
-    type Error = Infallible;
+    type Error = InvalidTcxoDelay;
     type Array = [u8; 4];
 
     fn to_bytes(self) -> Result<Self::Array, Self::Error> {
+        if self.delay > 0x00ff_ffff {
+            return Err(InvalidTcxoDelay);
+        }
         let mut bytes = [0u8; 4];
         bytes[0] = self.voltage as u8;
         bytes[1..4].copy_from_slice(&self.delay.to_be_bytes()[1..]);

@@ -27,9 +27,24 @@
 use core::convert::Infallible;
 
 use regiface::{
-    errors::Error as RegifaceError, ByteArray, Command, FromByteArray, ReadableRegister,
-    ToByteArray, WritableRegister,
+    ByteArray, Command, FromByteArray, ReadableRegister, ToByteArray, WritableRegister,
 };
+
+/// Write-register command opcode.
+pub const OPCODE_WRITE_REGISTER: u8 = 0x0d;
+/// Read-buffer command opcode.
+pub const OPCODE_READ_BUFFER: u8 = 0x1e;
+
+/// Errors returned by the radio interface.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error<S> {
+    /// SPI transaction failed.
+    Spi(S),
+    /// Command parameters could not be encoded.
+    Serialization,
+    /// A device response could not be decoded.
+    Deserialization,
+}
 
 /// Main device interface for the SX126x radio.
 ///
@@ -67,9 +82,9 @@ where
     /// * `R` - Register type implementing ReadableRegister with u16 ID
     ///
     /// # Errors
-    /// * `RegifaceError::BusError` - SPI communication failed
-    /// * `RegifaceError::DeserializationError` - Failed to parse register value
-    pub fn read_register<R>(&mut self) -> Result<R, RegifaceError>
+    /// * `Error::Spi` - SPI communication failed
+    /// * `Error::Deserialization` - Failed to parse register value
+    pub fn read_register<R>(&mut self) -> Result<R, Error<SPI::Error>>
     where
         R: ReadableRegister<IdType = u16>,
     {
@@ -83,9 +98,9 @@ where
                 embedded_hal::spi::Operation::Write(header.as_slice()),
                 embedded_hal::spi::Operation::Read(raw_value.as_mut()),
             ])
-            .map_err(|_| RegifaceError::BusError)?;
+            .map_err(Error::Spi)?;
 
-        R::from_bytes(raw_value).map_err(|_| RegifaceError::DeserializationError)
+        R::from_bytes(raw_value).map_err(|_| Error::Deserialization)
     }
 
     /// Writes a value to a device register.
@@ -97,12 +112,12 @@ where
     /// * `register` - The register value to write
     ///
     /// # Errors
-    /// * `RegifaceError::BusError` - SPI communication failed
-    pub fn write_register<R>(&mut self, register: R) -> Result<(), RegifaceError>
+    /// * `Error::Spi` - SPI communication failed
+    pub fn write_register<R>(&mut self, register: R) -> Result<(), Error<SPI::Error>>
     where
         R: WritableRegister<IdType = u16, Error = Infallible>,
     {
-        let header = &mut [0x0D, 0x00, 0x00];
+        let header = &mut [OPCODE_WRITE_REGISTER, 0x00, 0x00];
         header[1..].copy_from_slice(&R::id().to_be_bytes());
 
         let raw_value = register.to_bytes().unwrap();
@@ -112,7 +127,7 @@ where
                 embedded_hal::spi::Operation::Write(header.as_slice()),
                 embedded_hal::spi::Operation::Write(raw_value.as_ref()),
             ])
-            .map_err(|_| RegifaceError::BusError)
+            .map_err(Error::Spi)
     }
 
     /// Writes bytes to the device's buffer at a specified offset.
@@ -122,8 +137,8 @@ where
     /// * `bytes` - Data to write
     ///
     /// # Errors
-    /// * `RegifaceError::BusError` - SPI communication failed
-    pub fn write_buffer(&mut self, offset: u8, bytes: &[u8]) -> Result<(), RegifaceError> {
+    /// * `Error::Spi` - SPI communication failed
+    pub fn write_buffer(&mut self, offset: u8, bytes: &[u8]) -> Result<(), Error<SPI::Error>> {
         let header = &mut [0x0E, offset];
 
         self.spi
@@ -131,7 +146,7 @@ where
                 embedded_hal::spi::Operation::Write(header.as_slice()),
                 embedded_hal::spi::Operation::Write(bytes),
             ])
-            .map_err(|_| RegifaceError::BusError)
+            .map_err(Error::Spi)
     }
 
     /// Reads bytes from the device's buffer starting at a specified offset.
@@ -141,16 +156,16 @@ where
     /// * `bytes` - Buffer to store read data
     ///
     /// # Errors
-    /// * `RegifaceError::BusError` - SPI communication failed
-    pub fn read_buffer(&mut self, offset: u8, bytes: &mut [u8]) -> Result<(), RegifaceError> {
-        let header = &mut [0x1E, offset, 0x00];
+    /// * `Error::Spi` - SPI communication failed
+    pub fn read_buffer(&mut self, offset: u8, bytes: &mut [u8]) -> Result<(), Error<SPI::Error>> {
+        let header = &mut [OPCODE_READ_BUFFER, offset, 0x00];
 
         self.spi
             .transaction(&mut [
                 embedded_hal::spi::Operation::Write(header.as_slice()),
                 embedded_hal::spi::Operation::Read(bytes),
             ])
-            .map_err(|_| RegifaceError::BusError)
+            .map_err(Error::Spi)
     }
 
     /// Executes a command on the device.
@@ -165,14 +180,20 @@ where
     /// Command response parameters on success
     ///
     /// # Errors
-    /// * `RegifaceError::BusError` - SPI communication failed
-    /// * `RegifaceError::DeserializationError` - Failed to parse command response
-    pub fn execute_command<C>(&mut self, command: C) -> Result<C::ResponseParameters, RegifaceError>
+    /// * `Error::Spi` - SPI communication failed
+    /// * `Error::Serialization` - Invalid command parameters
+    /// * `Error::Deserialization` - Failed to parse command response
+    pub fn execute_command<C>(
+        &mut self,
+        command: C,
+    ) -> Result<C::ResponseParameters, Error<SPI::Error>>
     where
         C: Command<IdType = u8>,
-        C::CommandParameters: ToByteArray<Error = Infallible>,
     {
-        let request = command.invoking_parameters().to_bytes().unwrap();
+        let request = command
+            .invoking_parameters()
+            .to_bytes()
+            .map_err(|_| Error::Serialization)?;
         let mut raw_response = <C::ResponseParameters as FromByteArray>::Array::new();
 
         self.spi
@@ -181,10 +202,9 @@ where
                 embedded_hal::spi::Operation::Write(request.as_ref()),
                 embedded_hal::spi::Operation::Read(raw_response.as_mut()),
             ])
-            .map_err(|_| RegifaceError::BusError)?;
+            .map_err(Error::Spi)?;
 
-        C::ResponseParameters::from_bytes(raw_response)
-            .map_err(|_| RegifaceError::DeserializationError)
+        C::ResponseParameters::from_bytes(raw_response).map_err(|_| Error::Deserialization)
     }
 }
 
@@ -195,7 +215,7 @@ where
     /// Asynchronously reads a register value from the device.
     ///
     /// This is the async version of [`read_register`](Device::read_register).
-    pub async fn read_register_async<R>(&mut self) -> Result<R, RegifaceError>
+    pub async fn read_register_async<R>(&mut self) -> Result<R, Error<SPI::Error>>
     where
         R: ReadableRegister<IdType = u16>,
     {
@@ -210,19 +230,19 @@ where
                 embedded_hal_async::spi::Operation::Read(raw_value.as_mut()),
             ])
             .await
-            .map_err(|_| RegifaceError::BusError)?;
+            .map_err(Error::Spi)?;
 
-        R::from_bytes(raw_value).map_err(|_| RegifaceError::DeserializationError)
+        R::from_bytes(raw_value).map_err(|_| Error::Deserialization)
     }
 
     /// Asynchronously writes a value to a device register.
     ///
     /// This is the async version of [`write_register`](Device::write_register).
-    pub async fn write_register_async<R>(&mut self, register: R) -> Result<(), RegifaceError>
+    pub async fn write_register_async<R>(&mut self, register: R) -> Result<(), Error<SPI::Error>>
     where
         R: WritableRegister<IdType = u16, Error = Infallible>,
     {
-        let header = &mut [0x0D, 0x00, 0x00];
+        let header = &mut [OPCODE_WRITE_REGISTER, 0x00, 0x00];
         header[1..].copy_from_slice(&R::id().to_be_bytes());
 
         let raw_value = register.to_bytes().unwrap();
@@ -233,7 +253,7 @@ where
                 embedded_hal_async::spi::Operation::Write(raw_value.as_ref()),
             ])
             .await
-            .map_err(|_| RegifaceError::BusError)
+            .map_err(Error::Spi)
     }
 
     /// Asynchronously writes bytes to the device's buffer at a specified offset.
@@ -243,7 +263,7 @@ where
         &mut self,
         offset: u8,
         bytes: &[u8],
-    ) -> Result<(), RegifaceError> {
+    ) -> Result<(), Error<SPI::Error>> {
         let header = &mut [0x0E, offset];
 
         self.spi
@@ -252,7 +272,7 @@ where
                 embedded_hal_async::spi::Operation::Write(bytes),
             ])
             .await
-            .map_err(|_| RegifaceError::BusError)
+            .map_err(Error::Spi)
     }
 
     /// Asynchronously reads bytes from the device's buffer starting at a specified offset.
@@ -262,8 +282,8 @@ where
         &mut self,
         offset: u8,
         bytes: &mut [u8],
-    ) -> Result<(), RegifaceError> {
-        let header = &mut [0x1E, offset, 0x00];
+    ) -> Result<(), Error<SPI::Error>> {
+        let header = &mut [OPCODE_READ_BUFFER, offset, 0x00];
 
         self.spi
             .transaction(&mut [
@@ -271,7 +291,7 @@ where
                 embedded_hal_async::spi::Operation::Read(bytes),
             ])
             .await
-            .map_err(|_| RegifaceError::BusError)
+            .map_err(Error::Spi)
     }
 
     /// Asynchronously executes a command on the device.
@@ -280,12 +300,14 @@ where
     pub async fn execute_command_async<C>(
         &mut self,
         command: C,
-    ) -> Result<C::ResponseParameters, RegifaceError>
+    ) -> Result<C::ResponseParameters, Error<SPI::Error>>
     where
         C: Command<IdType = u8>,
-        C::CommandParameters: ToByteArray<Error = Infallible>,
     {
-        let request = command.invoking_parameters().to_bytes().unwrap();
+        let request = command
+            .invoking_parameters()
+            .to_bytes()
+            .map_err(|_| Error::Serialization)?;
         let mut raw_response = <C::ResponseParameters as FromByteArray>::Array::new();
 
         self.spi
@@ -295,9 +317,8 @@ where
                 embedded_hal_async::spi::Operation::Read(raw_response.as_mut()),
             ])
             .await
-            .map_err(|_| RegifaceError::BusError)?;
+            .map_err(Error::Spi)?;
 
-        C::ResponseParameters::from_bytes(raw_response)
-            .map_err(|_| RegifaceError::DeserializationError)
+        C::ResponseParameters::from_bytes(raw_response).map_err(|_| Error::Deserialization)
     }
 }

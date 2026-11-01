@@ -39,6 +39,12 @@ pub enum StatusError {
     InvalidCommandStatus(CommandStatusError),
 }
 
+impl From<Infallible> for StatusError {
+    fn from(value: Infallible) -> Self {
+        match value {}
+    }
+}
+
 /// Operating mode of the device
 ///
 /// Represents the current state of the radio's state machine.
@@ -105,6 +111,13 @@ impl TryFrom<u8> for CommandStatus {
     }
 }
 
+impl CommandStatus {
+    /// Decode the command-status field of a raw radio status byte.
+    pub fn from_status_byte(status: u8) -> Result<Self, CommandStatusError> {
+        Self::try_from((status >> 1) & 0x07)
+    }
+}
+
 /// Device status information
 ///
 /// Contains the current operating mode and command processing status.
@@ -129,11 +142,10 @@ impl FromByteArray for Status {
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         let mode = (bytes[0] >> 4) & 0x7;
-        let cmd = (bytes[0] >> 1) & 0x7;
-
         Ok(Self {
             mode: OperatingMode::try_from(mode).map_err(StatusError::InvalidMode)?,
-            cmd_status: CommandStatus::try_from(cmd).map_err(StatusError::InvalidCommandStatus)?,
+            cmd_status: CommandStatus::from_status_byte(bytes[0])
+                .map_err(StatusError::InvalidCommandStatus)?,
         })
     }
 }
@@ -164,6 +176,24 @@ impl Command for GetStatus {
     }
 }
 
+/// Get the unparsed status byte, including reserved values.
+#[derive(Debug, Clone)]
+pub struct GetRawStatus;
+
+impl Command for GetRawStatus {
+    type IdType = u8;
+    type CommandParameters = NoParameters;
+    type ResponseParameters = u8;
+
+    fn id() -> Self::IdType {
+        GetStatus::id()
+    }
+
+    fn invoking_parameters(self) -> Self::CommandParameters {
+        NoParameters::default()
+    }
+}
+
 /// GetRssiInst response
 ///
 /// Contains the device status and instantaneous RSSI value.
@@ -177,12 +207,12 @@ pub struct GetRssiInstResponse {
 }
 
 impl FromByteArray for GetRssiInstResponse {
-    type Error = Infallible;
+    type Error = StatusError;
     type Array = [u8; 2]; // 1 status byte + 1 RSSI byte
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         Ok(Self {
-            status: Status::from_bytes([bytes[0]]).unwrap(),
+            status: Status::from_bytes([bytes[0]])?,
             rssi: bytes[1],
         })
     }
@@ -253,13 +283,13 @@ pub struct GetRxBufferStatusResponse {
 }
 
 impl FromByteArray for GetRxBufferStatusResponse {
-    type Error = Infallible;
+    type Error = StatusError;
     type Array = [u8; 3]; // 1 status byte + 2 buffer bytes
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         Ok(Self {
-            status: Status::from_bytes([bytes[0]]).unwrap(),
-            buffer_status: RxBufferStatus::from_bytes([bytes[1], bytes[2]]).unwrap(),
+            status: Status::from_bytes([bytes[0]])?,
+            buffer_status: RxBufferStatus::from_bytes([bytes[1], bytes[2]])?,
         })
     }
 }
@@ -317,6 +347,13 @@ pub struct PacketStatus {
     pub status: [u8; 3],
 }
 
+impl PacketStatus {
+    /// GFSK average RSSI in half-dBm units.
+    pub fn gfsk_rssi_avg_half_dbm(&self) -> i16 {
+        -i16::from(self.status[2])
+    }
+}
+
 impl FromByteArray for PacketStatus {
     type Error = Infallible;
     type Array = [u8; 3];
@@ -338,13 +375,13 @@ pub struct GetPacketStatusResponse {
 }
 
 impl FromByteArray for GetPacketStatusResponse {
-    type Error = Infallible;
+    type Error = StatusError;
     type Array = [u8; 4]; // 1 status byte + 3 packet status bytes
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         Ok(Self {
-            status: Status::from_bytes([bytes[0]]).unwrap(),
-            packet_status: PacketStatus::from_bytes([bytes[1], bytes[2], bytes[3]]).unwrap(),
+            status: Status::from_bytes([bytes[0]])?,
+            packet_status: PacketStatus::from_bytes([bytes[1], bytes[2], bytes[3]])?,
         })
     }
 }
@@ -381,6 +418,8 @@ impl Command for GetPacketStatus {
 /// Contains flags for various error conditions.
 #[derive(Debug, Clone, Copy)]
 pub struct DeviceErrors {
+    /// Unmodified device error bits, including reserved bits.
+    pub raw: u16,
     /// RC64k calibration error
     pub rc64k_calib_err: bool,
     /// RC13M calibration error
@@ -400,12 +439,18 @@ pub struct DeviceErrors {
     pub pa_ramp_err: bool,
 }
 
+impl DeviceErrors {
+    /// XOSC startup error bit in the raw error flags.
+    pub const XOSC_START_ERROR: u16 = 1 << 5;
+}
+
 impl FromByteArray for DeviceErrors {
     type Error = Infallible;
     type Array = [u8; 2];
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         Ok(Self {
+            raw: u16::from_be_bytes(bytes),
             rc64k_calib_err: bytes[1] & 0b1 != 0,
             rc13m_calib_err: bytes[1] & 0b10 != 0,
             pll_calib_err: bytes[1] & 0b100 != 0,
@@ -430,13 +475,13 @@ pub struct GetDeviceErrorsResponse {
 }
 
 impl FromByteArray for GetDeviceErrorsResponse {
-    type Error = Infallible;
+    type Error = StatusError;
     type Array = [u8; 3]; // 1 status byte + 2 error bytes
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         Ok(Self {
-            status: Status::from_bytes([bytes[0]]).unwrap(),
-            errors: DeviceErrors::from_bytes([bytes[1], bytes[2]]).unwrap(),
+            status: Status::from_bytes([bytes[0]])?,
+            errors: DeviceErrors::from_bytes([bytes[1], bytes[2]])?,
         })
     }
 }
@@ -467,29 +512,6 @@ impl Command for GetDeviceErrors {
     }
 }
 
-/// ClearDeviceErrors response
-///
-/// Contains the two status bytes returned by the command.
-#[derive(Debug, Clone, Copy)]
-pub struct ClearDeviceErrorsResponse {
-    /// First status byte
-    pub status_1: Status,
-    /// Second status byte
-    pub status_2: Status,
-}
-
-impl FromByteArray for ClearDeviceErrorsResponse {
-    type Error = StatusError;
-    type Array = [u8; 2];
-
-    fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
-        Ok(Self {
-            status_1: Status::from_bytes([bytes[0]])?,
-            status_2: Status::from_bytes([bytes[1]])?,
-        })
-    }
-}
-
 /// ClearDeviceErrors command (0x07)
 ///
 /// Clears all device error flags.
@@ -503,15 +525,15 @@ pub struct ClearDeviceErrors;
 
 impl Command for ClearDeviceErrors {
     type IdType = u8;
-    type CommandParameters = NoParameters;
-    type ResponseParameters = ClearDeviceErrorsResponse;
+    type CommandParameters = regiface::Zeros<2>;
+    type ResponseParameters = NoParameters;
 
     fn id() -> Self::IdType {
         0x07
     }
 
     fn invoking_parameters(self) -> Self::CommandParameters {
-        NoParameters::default()
+        regiface::Zeros::default()
     }
 }
 
@@ -559,14 +581,13 @@ pub struct GetStatsResponse {
 }
 
 impl FromByteArray for GetStatsResponse {
-    type Error = Infallible;
+    type Error = StatusError;
     type Array = [u8; 7]; // 1 status byte + 6 stats bytes
 
     fn from_bytes(bytes: Self::Array) -> Result<Self, Self::Error> {
         Ok(Self {
-            status: Status::from_bytes([bytes[0]]).unwrap(),
-            stats: Stats::from_bytes([bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6]])
-                .unwrap(),
+            status: Status::from_bytes([bytes[0]])?,
+            stats: Stats::from_bytes([bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6]])?,
         })
     }
 }
