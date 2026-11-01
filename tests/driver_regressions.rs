@@ -15,7 +15,7 @@ use sx1262::{
         SetRegulatorMode, SetRfFrequency, SetRx, SetRxDutyCycle, SetStandby, StandbyConfig,
         TcxoConfig, TcxoVoltage,
     },
-    registers::SyncWord,
+    registers::{SyncWord, WhiteningInitialValue},
     Device, Error,
 };
 
@@ -222,6 +222,21 @@ fn preamble_detector_is_the_longest_that_fits() {
     for (bits, detector) in expected {
         assert_eq!(PreambleDetectorLength::longest_within(bits), detector);
     }
+}
+
+#[test]
+fn whitening_seed_keeps_the_seven_most_significant_register_bits() {
+    assert_eq!(WhiteningInitialValue::SEED, 0..=0x01ff);
+    let register = WhiteningInitialValue { value: 0x1234 };
+    assert_eq!(register.with_seed(0x01ff).value, 0x13ff);
+    assert_eq!(register.with_seed(0).value, 0x1200);
+    assert_eq!(register.with_seed(0x0100).value, 0x1300);
+    // Bits above the seed are dropped, not written to the reserved bits.
+    assert_eq!(register.with_seed(0xffff).value, 0x13ff);
+    assert_eq!(
+        WhiteningInitialValue::default().with_seed(0x01ff).value,
+        0x01ff
+    );
 }
 
 #[test]

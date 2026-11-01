@@ -32,7 +32,8 @@ use regiface::{
 
 /// Write-register command opcode.
 pub const OPCODE_WRITE_REGISTER: u8 = 0x0d;
-const OPCODE_READ_REGISTER: u8 = 0x1d;
+/// Read-register command opcode.
+pub const OPCODE_READ_REGISTER: u8 = 0x1d;
 /// Read-buffer command opcode.
 pub const OPCODE_READ_BUFFER: u8 = 0x1e;
 

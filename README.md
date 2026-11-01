@@ -53,6 +53,9 @@ other frequencies it calibrates ±4 MHz around it (RadioLib's approach, not
 vendor-validated), and `ImageCalibConfig::covering` computes the codes for any range.
 `PreambleDetectorLength::longest_within` picks the longest GFSK preamble detector
 that fits the shorter of the preamble and the sync word, as RadioLib does.
+`WhiteningInitialValue::with_seed` replaces the 9-bit whitening seed while keeping
+the 7 reserved MSBs of the register, which the datasheet says must not change;
+read the register first and pass the result through it.
 The driver is organized into modules for registers and commands:
 
 - **device**: Main interface for hardware interaction

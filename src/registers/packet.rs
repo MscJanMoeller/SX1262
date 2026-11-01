@@ -11,6 +11,7 @@
 //! to define the complete packet format.
 
 use core::convert::Infallible;
+use core::ops::RangeInclusive;
 
 use regiface::{register, FromByteArray, ReadableRegister, ToByteArray, WritableRegister};
 
@@ -38,6 +39,22 @@ pub struct WhiteningInitialValue {
 impl Default for WhiteningInitialValue {
     fn default() -> Self {
         Self { value: 0x0100 }
+    }
+}
+
+impl WhiteningInitialValue {
+    /// Seeds the 9-bit LFSR can start from. The datasheet forbids changing the
+    /// other 7 bits (the MSBs of the register at 0x06B8).
+    pub const SEED: RangeInclusive<u16> = 0..=0x01FF;
+
+    /// Returns this value with the 9-bit LFSR seed replaced and the 7 MSBs kept.
+    ///
+    /// Only the low 9 bits of `seed` are used; check [`Self::SEED`] first. Start
+    /// from the value read back from the radio, so that the 7 MSBs stay untouched.
+    pub const fn with_seed(self, seed: u16) -> Self {
+        Self {
+            value: (self.value & !*Self::SEED.end()) | (seed & *Self::SEED.end()),
+        }
     }
 }
 
