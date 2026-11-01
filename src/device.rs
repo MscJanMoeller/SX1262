@@ -75,6 +75,16 @@ impl<SPI> Device<SPI> {
         Self { spi }
     }
 
+    /// Returns a shared reference to the underlying SPI device.
+    pub fn spi(&self) -> &SPI {
+        &self.spi
+    }
+
+    /// Returns a mutable reference to the underlying SPI device.
+    pub fn spi_mut(&mut self) -> &mut SPI {
+        &mut self.spi
+    }
+
     /// Releases the underlying SPI device.
     ///
     /// This method consumes the Device instance and returns the wrapped SPI interface.

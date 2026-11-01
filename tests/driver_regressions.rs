@@ -12,7 +12,8 @@ use sx1262::{
         ModulationParams, OperatingMode, PacketParams, PacketType, PreambleDetectorLength,
         RegulatorMode, RfFrequencyConfig, RxDutyCycleConfig, RxMode, SetBufferBaseAddress,
         SetDio3AsTcxoCtrl, SetDioIrqParams, SetModulationParams, SetPacketParams, SetPacketType,
-        SetRegulatorMode, SetRfFrequency, SetRx, SetRxDutyCycle, TcxoConfig, TcxoVoltage,
+        SetRegulatorMode, SetRfFrequency, SetRx, SetRxDutyCycle, SetStandby, StandbyConfig,
+        TcxoConfig, TcxoVoltage,
     },
     registers::SyncWord,
     Device, Error,
@@ -102,6 +103,21 @@ fn tcxo_encoding_checks_its_24_bit_limit() {
         })
         .unwrap();
     assert_eq!(device.release().writes, [0x97, 0x06, 0, 1, 0x40]);
+}
+
+#[test]
+fn spi_accessors_expose_the_wrapped_device_without_releasing_it() {
+    let mut device = Device::new(MockSpi::default());
+    assert!(device.spi().writes.is_empty());
+    device
+        .execute_command(SetStandby {
+            config: StandbyConfig::Rc,
+        })
+        .unwrap();
+    assert_eq!(device.spi().writes, [0x80, 0x00]);
+    device.spi_mut().writes.clear();
+    assert!(device.spi().writes.is_empty());
+    assert!(device.release().writes.is_empty());
 }
 
 #[test]
