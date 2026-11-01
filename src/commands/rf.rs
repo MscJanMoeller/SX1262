@@ -12,11 +12,15 @@
 //!
 //! Most configuration commands must be issued while in STDBY_RC mode.
 
-use core::convert::Infallible;
+use core::{convert::Infallible, ops::RangeInclusive};
 
 use regiface::FromByteArray;
 
 use crate::{Command, NoParameters, ToByteArray};
+
+/// RF frequency outside [`RfFrequencyConfig::FREQUENCY_HZ`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidRfFrequency;
 
 /// RF frequency configuration parameters
 ///
@@ -26,15 +30,23 @@ use crate::{Command, NoParameters, ToByteArray};
 #[derive(Debug, Clone, Copy)]
 pub struct RfFrequencyConfig {
     /// RF frequency in Hz
-    /// Valid range: 150MHz to 960MHz
+    /// Valid range: [`RfFrequencyConfig::FREQUENCY_HZ`]
     pub frequency: u32,
 }
 
+impl RfFrequencyConfig {
+    /// Frequencies supported by the radio, in hertz.
+    pub const FREQUENCY_HZ: RangeInclusive<u32> = 150_000_000..=960_000_000;
+}
+
 impl ToByteArray for RfFrequencyConfig {
-    type Error = Infallible;
+    type Error = InvalidRfFrequency;
     type Array = [u8; 4];
 
     fn to_bytes(self) -> Result<Self::Array, Self::Error> {
+        if !Self::FREQUENCY_HZ.contains(&self.frequency) {
+            return Err(InvalidRfFrequency);
+        }
         // Frequency register = (Frequency * 2^25) / FXTAL
         let f = ((self.frequency as u64 * (1_u64 << 25)) / 32_000_000) as u32;
 
@@ -248,15 +260,32 @@ impl Command for SetTxParams {
 #[derive(Debug, Clone, Copy)]
 pub struct GfskModParams {
     /// Bit rate in bits per second
-    /// Valid range: 600 bps to 300 kbps
+    /// Valid range: [`GfskModParams::BIT_RATE_BPS`]
     pub bit_rate: u32,
     /// Pulse shape filtering for spectral efficiency
     pub pulse_shape: GfskPulseShape,
     /// RX bandwidth setting for channel filtering
     pub bandwidth: GfskBandwidth,
     /// Frequency deviation in Hz
+    /// Valid range: [`GfskModParams::FREQ_DEVIATION_HZ`]
     /// Maximum deviation should be < 0.5 * bandwidth
     pub freq_deviation: u32,
+}
+
+impl GfskModParams {
+    /// Bit rates supported by the radio, in bits per second.
+    pub const BIT_RATE_BPS: RangeInclusive<u32> = 600..=300_000;
+    /// Frequency deviations supported by the radio, in hertz.
+    pub const FREQ_DEVIATION_HZ: RangeInclusive<u32> = 600..=200_000;
+}
+
+/// GFSK modulation parameters outside the radio's supported ranges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidModulationParams {
+    /// Bit rate outside [`GfskModParams::BIT_RATE_BPS`].
+    BitRate,
+    /// Frequency deviation outside [`GfskModParams::FREQ_DEVIATION_HZ`].
+    FrequencyDeviation,
 }
 
 /// GFSK pulse shape options for spectral shaping
@@ -290,7 +319,7 @@ pub enum GfskPulseShape {
 /// - Expected frequency error
 ///
 /// Wider bandwidths allow higher data rates but reduce selectivity
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GfskBandwidth {
     /// 4.8 kHz Double-Side Bandwidth
     Bw48 = 0x1F,
@@ -334,6 +363,64 @@ pub enum GfskBandwidth {
     Bw3736 = 0x11,
     /// 467.0 kHz Double-Side Bandwidth
     Bw4670 = 0x09,
+}
+
+impl GfskBandwidth {
+    const ALL: [Self; 21] = [
+        Self::Bw48,
+        Self::Bw58,
+        Self::Bw73,
+        Self::Bw97,
+        Self::Bw117,
+        Self::Bw146,
+        Self::Bw195,
+        Self::Bw234,
+        Self::Bw293,
+        Self::Bw39,
+        Self::Bw469,
+        Self::Bw586,
+        Self::Bw782,
+        Self::Bw938,
+        Self::Bw1173,
+        Self::Bw1562,
+        Self::Bw1872,
+        Self::Bw2323,
+        Self::Bw3120,
+        Self::Bw3736,
+        Self::Bw4670,
+    ];
+
+    /// Double-side bandwidth in hertz.
+    pub const fn hz(self) -> u32 {
+        match self {
+            Self::Bw48 => 4_800,
+            Self::Bw58 => 5_800,
+            Self::Bw73 => 7_300,
+            Self::Bw97 => 9_700,
+            Self::Bw117 => 11_700,
+            Self::Bw146 => 14_600,
+            Self::Bw195 => 19_500,
+            Self::Bw234 => 23_400,
+            Self::Bw293 => 29_300,
+            Self::Bw39 => 39_000,
+            Self::Bw469 => 46_900,
+            Self::Bw586 => 58_600,
+            Self::Bw782 => 78_200,
+            Self::Bw938 => 93_800,
+            Self::Bw1173 => 117_300,
+            Self::Bw1562 => 156_200,
+            Self::Bw1872 => 187_200,
+            Self::Bw2323 => 232_300,
+            Self::Bw3120 => 312_000,
+            Self::Bw3736 => 373_600,
+            Self::Bw4670 => 467_000,
+        }
+    }
+
+    /// Setting for an exact double-side bandwidth in hertz.
+    pub fn from_hz(hz: u32) -> Option<Self> {
+        Self::ALL.into_iter().find(|setting| setting.hz() == hz)
+    }
 }
 
 /// LoRa modulation parameters
@@ -481,13 +568,19 @@ pub enum ModulationParams {
 }
 
 impl ToByteArray for ModulationParams {
-    type Error = Infallible;
+    type Error = InvalidModulationParams;
     type Array = [u8; 8];
 
     fn to_bytes(self) -> Result<Self::Array, Self::Error> {
         let mut bytes = [0u8; 8];
         match self {
             ModulationParams::Gfsk(params) => {
+                if !GfskModParams::BIT_RATE_BPS.contains(&params.bit_rate) {
+                    return Err(InvalidModulationParams::BitRate);
+                }
+                if !GfskModParams::FREQ_DEVIATION_HZ.contains(&params.freq_deviation) {
+                    return Err(InvalidModulationParams::FrequencyDeviation);
+                }
                 // Bit rate = (32 * FXTAL) / bit_rate
                 let br_val = (32 * 32_000_000) / params.bit_rate;
                 bytes[0..3].copy_from_slice(&br_val.to_be_bytes()[1..]);

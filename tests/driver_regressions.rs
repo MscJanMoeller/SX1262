@@ -4,11 +4,17 @@ use regiface::{Command, FromByteArray, ToByteArray};
 use std::task::{Context, Poll, Waker};
 use sx1262::{
     commands::{
-        ClearDeviceErrors, CommandStatusError, GetDeviceErrors, GetDeviceErrorsResponse,
-        GetIrqStatus, GetIrqStatusResponse, GetPacketStatusResponse, GetRawStatus,
-        GetRssiInstResponse, GetRxBufferStatusResponse, GetStatsResponse, ImageCalibConfig,
-        IrqMask, OperatingMode, SetDio3AsTcxoCtrl, TcxoConfig, TcxoVoltage,
+        AddressFiltering, BufferBaseAddressConfig, Calibrate, CalibrationConfig, ClearDeviceErrors,
+        CommandStatusError, CrcType, DioIrqConfig, GFSKPacketHeaderType, GFSKPacketParams,
+        GetDeviceErrors, GetDeviceErrorsResponse, GetIrqStatus, GetIrqStatusResponse,
+        GetPacketStatusResponse, GetRawStatus, GetRssiInstResponse, GetRxBufferStatusResponse,
+        GetStatsResponse, GfskBandwidth, GfskModParams, GfskPulseShape, ImageCalibConfig, IrqMask,
+        ModulationParams, OperatingMode, PacketParams, PacketType, PreambleDetectorLength,
+        RegulatorMode, RfFrequencyConfig, RxDutyCycleConfig, RxMode, SetBufferBaseAddress,
+        SetDio3AsTcxoCtrl, SetDioIrqParams, SetModulationParams, SetPacketParams, SetPacketType,
+        SetRegulatorMode, SetRfFrequency, SetRx, SetRxDutyCycle, TcxoConfig, TcxoVoltage,
     },
+    registers::SyncWord,
     Device, Error,
 };
 
@@ -225,4 +231,240 @@ fn async_device_preserves_transport_and_parser_errors() {
         Err(Error::Serialization)
     ));
     assert!(device.release().writes.is_empty());
+}
+
+fn wire<C: Command<IdType = u8>>(command: C) -> Vec<u8> {
+    let mut device = Device::new(MockSpi::default());
+    assert!(device.execute_command(command).is_ok());
+    device.release().writes
+}
+
+fn rejected<C: Command<IdType = u8>>(command: C) {
+    let mut device = Device::new(MockSpi::default());
+    assert!(matches!(
+        device.execute_command(command),
+        Err(Error::Serialization)
+    ));
+    assert!(device.release().writes.is_empty());
+}
+
+fn gfsk(bit_rate: u32, freq_deviation: u32) -> SetModulationParams {
+    SetModulationParams {
+        params: ModulationParams::Gfsk(GfskModParams {
+            bit_rate,
+            pulse_shape: GfskPulseShape::NoFilter,
+            bandwidth: GfskBandwidth::Bw1173,
+            freq_deviation,
+        }),
+    }
+}
+
+#[test]
+fn gfsk_receive_commands_have_datasheet_bytes() {
+    assert_eq!(
+        wire(SetPacketType {
+            packet_type: PacketType::Gfsk
+        }),
+        [0x8a, 0]
+    );
+    assert_eq!(
+        wire(SetRfFrequency {
+            config: RfFrequencyConfig {
+                frequency: 868_350_000
+            }
+        }),
+        [0x86, 0x36, 0x45, 0x99, 0x99]
+    );
+    assert_eq!(
+        wire(gfsk(17_200, 35_000)),
+        [0x8b, 0x00, 0xe8, 0x8e, 0x00, 0x0b, 0x00, 0x8f, 0x5c]
+    );
+    assert_eq!(
+        wire(SetPacketParams {
+            params: PacketParams::GFSK(GFSKPacketParams {
+                preamble_length: 48,
+                preamble_detector_length: PreambleDetectorLength::Bits16,
+                sync_word_length: 16,
+                address_filtering: AddressFiltering::Disable,
+                packet_type: GFSKPacketHeaderType::Fixed,
+                payload_length: 64,
+                crc_type: CrcType::CrcOff,
+                whitening_enable: false,
+            })
+        }),
+        [0x8c, 0, 48, 0x05, 16, 0, 0, 64, 1, 0]
+    );
+    let mut device = Device::new(MockSpi::default());
+    device
+        .write_register(SyncWord {
+            value: [0x2d, 0xd4, 0, 0, 0, 0, 0, 0],
+        })
+        .unwrap();
+    assert_eq!(
+        device.release().writes,
+        [0x0d, 0x06, 0xc0, 0x2d, 0xd4, 0, 0, 0, 0, 0, 0]
+    );
+    assert_eq!(
+        wire(SetBufferBaseAddress {
+            config: BufferBaseAddressConfig {
+                tx_base_addr: 0,
+                rx_base_addr: 0
+            }
+        }),
+        [0x8f, 0, 0]
+    );
+    assert_eq!(
+        wire(SetDioIrqParams {
+            config: DioIrqConfig {
+                irq_mask: IrqMask::RX_DONE
+                    | IrqMask::PREAMBLE_DETECTED
+                    | IrqMask::SYNC_WORD_VALID
+                    | IrqMask::HEADER_ERROR
+                    | IrqMask::CRC_ERROR
+                    | IrqMask::TIMEOUT,
+                dio1_mask: IrqMask::RX_DONE
+                    | IrqMask::HEADER_ERROR
+                    | IrqMask::CRC_ERROR
+                    | IrqMask::TIMEOUT,
+                dio2_mask: IrqMask::empty(),
+                dio3_mask: IrqMask::empty(),
+            }
+        }),
+        [0x08, 0x02, 0x6e, 0x02, 0x62, 0, 0, 0, 0]
+    );
+    assert_eq!(
+        wire(SetRegulatorMode {
+            mode: RegulatorMode::LdoOnly
+        }),
+        [0x96, 0]
+    );
+    assert_eq!(
+        wire(Calibrate {
+            config: CalibrationConfig::all()
+        }),
+        [0x89, 0x7f]
+    );
+    assert_eq!(
+        wire(SetRx {
+            mode: RxMode::Continuous
+        }),
+        [0x82, 0xff, 0xff, 0xff]
+    );
+    assert_eq!(
+        wire(SetRx {
+            mode: RxMode::Single
+        }),
+        [0x82, 0, 0, 0]
+    );
+}
+
+#[test]
+fn gfsk_rssi_is_reported_in_half_dbm() {
+    let response = GetPacketStatusResponse::from_bytes([0x24, 0x02, 0x70, 0x67]).unwrap();
+    assert_eq!(response.packet_status.gfsk_rssi_avg_half_dbm(), -103);
+}
+
+#[test]
+fn gfsk_bandwidth_settings_match_datasheet_table() {
+    let table = [
+        (4_800, 0x1f),
+        (5_800, 0x17),
+        (7_300, 0x0f),
+        (9_700, 0x1e),
+        (11_700, 0x16),
+        (14_600, 0x0e),
+        (19_500, 0x1d),
+        (23_400, 0x15),
+        (29_300, 0x0d),
+        (39_000, 0x1c),
+        (46_900, 0x14),
+        (58_600, 0x0c),
+        (78_200, 0x1b),
+        (93_800, 0x13),
+        (117_300, 0x0b),
+        (156_200, 0x1a),
+        (187_200, 0x12),
+        (232_300, 0x0a),
+        (312_000, 0x19),
+        (373_600, 0x11),
+        (467_000, 0x09),
+    ];
+    for (hz, code) in table {
+        let bandwidth = GfskBandwidth::from_hz(hz).unwrap();
+        assert_eq!(bandwidth as u8, code);
+        assert_eq!(bandwidth.hz(), hz);
+    }
+    assert_eq!(GfskBandwidth::from_hz(125_000), None);
+    assert_eq!(GfskBandwidth::from_hz(0), None);
+}
+
+#[test]
+fn gfsk_modulation_rejects_values_outside_radio_limits() {
+    assert_eq!(
+        wire(gfsk(600, 600)),
+        [0x8b, 0x1a, 0x0a, 0xaa, 0x00, 0x0b, 0x00, 0x02, 0x75]
+    );
+    assert_eq!(
+        wire(gfsk(300_000, 200_000)),
+        [0x8b, 0x00, 0x0d, 0x55, 0x00, 0x0b, 0x03, 0x33, 0x33]
+    );
+    for (bit_rate, deviation) in [
+        (0, 35_000),
+        (599, 35_000),
+        (300_001, 35_000),
+        (17_200, 0),
+        (17_200, 599),
+        (17_200, 200_001),
+    ] {
+        rejected(gfsk(bit_rate, deviation));
+    }
+    assert!(ModulationParams::Gfsk(GfskModParams {
+        bit_rate: 0,
+        pulse_shape: GfskPulseShape::NoFilter,
+        bandwidth: GfskBandwidth::Bw1173,
+        freq_deviation: 35_000,
+    })
+    .to_bytes()
+    .is_err());
+}
+
+#[test]
+fn rf_frequency_rejects_values_outside_radio_range() {
+    let frequency = |frequency| SetRfFrequency {
+        config: RfFrequencyConfig { frequency },
+    };
+    assert_eq!(wire(frequency(150_000_000)), [0x86, 0x09, 0x60, 0x00, 0x00]);
+    assert_eq!(wire(frequency(960_000_000)), [0x86, 0x3c, 0x00, 0x00, 0x00]);
+    rejected(frequency(149_999_999));
+    rejected(frequency(960_000_001));
+}
+
+#[test]
+fn receive_timers_use_24_bit_fields() {
+    assert_eq!(
+        wire(SetRx {
+            mode: RxMode::Timed(0xff_fffe)
+        }),
+        [0x82, 0xff, 0xff, 0xfe]
+    );
+    rejected(SetRx {
+        mode: RxMode::Timed(0x100_0000),
+    });
+    assert_eq!(
+        wire(SetRxDutyCycle {
+            config: RxDutyCycleConfig {
+                rx_period: 0x01_0203,
+                sleep_period: 0x04_0506,
+            }
+        }),
+        [0x94, 1, 2, 3, 4, 5, 6]
+    );
+    for (rx_period, sleep_period) in [(0x100_0000, 0), (0, 0x100_0000)] {
+        rejected(SetRxDutyCycle {
+            config: RxDutyCycleConfig {
+                rx_period,
+                sleep_period,
+            },
+        });
+    }
 }

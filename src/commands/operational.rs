@@ -152,21 +152,31 @@ impl Command for SetFs {
     }
 }
 
+/// Timer value exceeds the 24-bit range of the radio's timeout fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidTimeout;
+
+fn timer_bytes(steps: u32) -> Result<[u8; 3], InvalidTimeout> {
+    if steps > 0x00ff_ffff {
+        return Err(InvalidTimeout);
+    }
+    let [_, high, mid, low] = steps.to_be_bytes();
+    Ok([high, mid, low])
+}
+
 /// Timeout configuration for Tx/Rx operations
 ///
 /// Used to automatically terminate TX/RX operations
-/// after specified period.
+/// after specified period. Values above 24 bits are rejected.
 #[derive(Debug, Clone, Copy)]
 pub struct Timeout(pub u32);
 
 impl ToByteArray for Timeout {
-    type Error = Infallible;
+    type Error = InvalidTimeout;
     type Array = [u8; 3];
 
     fn to_bytes(self) -> Result<Self::Array, Self::Error> {
-        let mut bytes = [0u8; 3];
-        bytes.copy_from_slice(&self.0.to_be_bytes()[1..4]);
-        Ok(bytes)
+        timer_bytes(self.0)
     }
 }
 
@@ -305,7 +315,8 @@ impl Command for StopTimerOnPreamble {
 
 /// RxDutyCycle configuration
 ///
-/// Controls periodic wake-up for packet reception.
+/// Controls periodic wake-up for packet reception. Both periods are
+/// 24-bit values; larger values are rejected.
 #[derive(Debug, Clone, Copy)]
 pub struct RxDutyCycleConfig {
     /// RX period in steps of 15.625 μs
@@ -318,14 +329,13 @@ pub struct RxDutyCycleConfig {
 }
 
 impl ToByteArray for RxDutyCycleConfig {
-    type Error = Infallible;
-    type Array = [u8; 8];
+    type Error = InvalidTimeout;
+    type Array = [u8; 6];
 
     fn to_bytes(self) -> Result<Self::Array, Self::Error> {
-        let mut bytes = [0u8; 8];
-        bytes[0..4].copy_from_slice(&self.rx_period.to_be_bytes());
-        bytes[4..8].copy_from_slice(&self.sleep_period.to_be_bytes());
-        Ok(bytes)
+        let [r0, r1, r2] = timer_bytes(self.rx_period)?;
+        let [s0, s1, s2] = timer_bytes(self.sleep_period)?;
+        Ok([r0, r1, r2, s0, s1, s2])
     }
 }
 

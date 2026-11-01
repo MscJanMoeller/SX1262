@@ -37,10 +37,14 @@ serialization or deserialization errors. Deserialization errors include the
 opcode and first response byte, if any. The caller must handle BUSY timing,
 IRQ waits, and the radio's required command sequence.
 
-`TcxoConfig::delay` is a 24-bit count of 15.625 µs steps; larger values are
-rejected. Status responses reject invalid operating modes and preserve
-unrecognized command-status values and the raw byte. `GetRawStatus` is
-available when the raw status byte is needed for diagnostics.
+`TcxoConfig::delay`, `Timeout` and `RxDutyCycleConfig` periods are 24-bit counts
+of 15.625 µs steps; larger values are rejected. The RF frequency
+(`RfFrequencyConfig::FREQUENCY_HZ`) and GFSK bit rate and deviation
+(`GfskModParams::BIT_RATE_BPS`, `GfskModParams::FREQ_DEVIATION_HZ`) are
+range-checked when encoded, and `GfskBandwidth::from_hz`/`hz` convert between
+bandwidth settings and hertz. Status responses reject invalid operating modes
+and preserve unrecognized command-status values and the raw byte.
+`GetRawStatus` is available when the raw status byte is needed for diagnostics.
 
 The driver is organized into modules for registers and commands:
 
